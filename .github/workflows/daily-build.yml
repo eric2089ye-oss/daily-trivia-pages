@@ -1,0 +1,63 @@
+name: Daily build
+
+# M3 影子模式骨架（2026-10-25）：本 workflow 先验证 KV 数据链路（拉取+完整性校验），
+# 完整构建步骤（拉 code 包 → 全量重建 site/ → wrangler 部署 → IndexNow → 线上验收）
+# 按迁移计划接力合入。正式切换前只跑数据验证，不部署生产。
+
+on:
+  workflow_dispatch: {}
+  repository_dispatch:
+    types: [data-updated]
+  schedule:
+    # Backstop after the collector's 04:05-05:50 UTC retry ladder.
+    - cron: '35 5 * * *'
+
+concurrency:
+  group: daily-build
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      KV_NAMESPACE: ${{ secrets.KV_NAMESPACE }}
+      KV_TOKEN: ${{ secrets.KV_TOKEN }}
+      SITE_HOST: hints4today.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull dive data from Cloudflare KV
+        run: |
+          mkdir -p data
+          BASE="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces/$KV_NAMESPACE/values"
+          curl -sS --fail --max-time 90 \
+            -H "Authorization: Bearer $KV_TOKEN" \
+            "$BASE/data/dives-all" -o data/dives-all.json
+          python3 -m json.tool data/dives-all.json > /dev/null
+          echo "pulled dives-all.json ($(wc -c < data/dives-all.json) bytes)"
+
+      - name: Data integrity gate
+        run: |
+          python3 - <<'EOF'
+          import json, datetime
+          d = json.load(open('data/dives-all.json'))
+          dives = d['dives']
+          dates = [x['diso'] for x in dives]
+          assert len(dives) == d['latest_n'], f"count {len(dives)} != latest_n {d['latest_n']}"
+          assert len(set(dates)) == len(dates), "duplicate dates"
+          for x in dives:
+              assert len(x['prompts']) == 7, x['diso']
+              assert len(x['pools']) == 7, x['diso']
+          today = datetime.date.today()
+          expect_min = (today - datetime.timedelta(days=1)).isoformat()
+          latest = max(dates)
+          print(f"integrity OK: {len(dives)} dives, latest {latest}")
+          if latest < expect_min:
+              raise SystemExit(f"STALE: latest {latest} < {expect_min}")
+          print("freshness OK")
+          EOF
