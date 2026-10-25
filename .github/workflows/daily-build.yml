@@ -48,6 +48,10 @@ jobs:
             -H "Authorization: Bearer $KV_TOKEN" \
             "$BASE/data/site-seed.tar.gz" -o data/site-seed.tar.gz
           echo "pulled site-seed.tar.gz ($(wc -c < data/site-seed.tar.gz) bytes)"
+          curl -sS --fail --max-time 60 \
+            -H "Authorization: Bearer $KV_TOKEN" \
+            "$BASE/data/site-practice.tar.gz" -o data/site-practice.tar.gz
+          echo "pulled site-practice.tar.gz ($(wc -c < data/site-practice.tar.gz) bytes)"
           curl -sS --fail --max-time 120 \
             -H "Authorization: Bearer $KV_TOKEN" \
             "$BASE/code/pkg.tar.gz" -o code.tar.gz
@@ -79,6 +83,7 @@ jobs:
       - name: Rebuild retained pages (patch mode, no new pages)
         run: |
           tar xzf data/site-seed.tar.gz
+          tar xzf data/site-practice.tar.gz
           tar xzf code.tar.gz
           pip install -q curl_cffi
           python3 scripts/build_daily.py
