@@ -40,12 +40,14 @@ jobs:
         run: |
           mkdir -p data
           BASE="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces/$KV_NAMESPACE/values"
-          for k in dives-all site-seed.tar.gz; do
-            curl -sS --fail --max-time 120 \
-              -H "Authorization: Bearer $KV_TOKEN" \
-              "$BASE/data/$k" -o "data/$k"
-            echo "pulled data/$k ($(wc -c < data/$k) bytes)"
-          done
+          curl -sS --fail --max-time 120 \
+            -H "Authorization: Bearer $KV_TOKEN" \
+            "$BASE/data/dives-all" -o data/dives-all.json
+          echo "pulled dives-all.json ($(wc -c < data/dives-all.json) bytes)"
+          curl -sS --fail --max-time 120 \
+            -H "Authorization: Bearer $KV_TOKEN" \
+            "$BASE/data/site-seed.tar.gz" -o data/site-seed.tar.gz
+          echo "pulled site-seed.tar.gz ($(wc -c < data/site-seed.tar.gz) bytes)"
           curl -sS --fail --max-time 120 \
             -H "Authorization: Bearer $KV_TOKEN" \
             "$BASE/code/pkg.tar.gz" -o code.tar.gz
