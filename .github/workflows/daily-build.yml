@@ -108,6 +108,19 @@ jobs:
           done
           echo "Live site verified on $HOST"
 
+      - name: IndexNow ping (production host, retained pages)
+        run: |
+          KEY_FILE=$(cd site && ls | grep -E '^[a-f0-9]{32}\.txt$' | head -1 || true)
+          if [ -n "$KEY_FILE" ]; then
+            KEY="${KEY_FILE%.txt}"
+            curl -sS -X POST https://api.indexnow.org/indexnow \
+              -H "Content-Type: application/json" \
+              --data "{\"host\":\"$SITE_HOST\",\"key\":\"$KEY\",\"keyLocation\":\"https://$SITE_HOST/$KEY.txt\",\"urlList\":[\"https://$SITE_HOST/\",\"https://$SITE_HOST/yesterday/\",\"https://$SITE_HOST/krillion-hints/\",\"https://$SITE_HOST/krillion-archive/\"]}" || true
+            echo "IndexNow pinged"
+          else
+            echo "no IndexNow key file in build output"
+          fi
+
       - name: Build summary
         if: always()
         run: |
