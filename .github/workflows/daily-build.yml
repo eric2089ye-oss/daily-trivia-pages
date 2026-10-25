@@ -76,15 +76,13 @@ jobs:
           print("freshness OK (>= %s)" % expect_min)
           EOF
 
-      - name: Unpack and rebuild the full site
+      - name: Rebuild retained pages (patch mode, no new pages)
         run: |
           tar xzf data/site-seed.tar.gz
           tar xzf code.tar.gz
           pip install -q curl_cffi
-          python3 scripts/build_all.py
-
-      - name: Local verify (32-check gate)
-        run: python3 scripts/verify_site.py
+          python3 scripts/build_daily.py
+          # build_daily 内置守恒断言：63 页不变 + sitemap URL 集不变（DSH 2026-10-24 规则）
 
       - name: Deploy to Cloudflare Pages
         env:
@@ -102,11 +100,12 @@ jobs:
             echo "VERIFICATION FAILED: title does not carry #$LATEST"
             exit 1
           fi
-          # 抽查日期页 200
-          D=$(python3 -c "import json; d=json.load(open('data/dives-all.json')); print(d['dives'][-1]['diso'])")
-          CODE=$(curl -sL -o /dev/null -w "%{http_code}" --max-time 30 "https://$HOST/answers/$D/")
-          echo "day page /answers/$D/ → $CODE"
-          [ "$CODE" = "200" ] || exit 1
+          # 保留页抽查（63 URL 冻结集）
+          for u in /krillion-hints/ /rare-krillion-answers/ /krillion-archive/october-2026/ /faq/; do
+            CODE=$(curl -sL -o /dev/null -w "%{http_code}" --max-time 30 "https://$HOST$u")
+            echo "kept page $u → $CODE"
+            [ "$CODE" = "200" ] || exit 1
+          done
           echo "Live site verified on $HOST"
 
       - name: Build summary
