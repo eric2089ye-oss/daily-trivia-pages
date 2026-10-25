@@ -104,7 +104,7 @@ jobs:
           fi
           # 抽查日期页 200
           D=$(python3 -c "import json; d=json.load(open('data/dives-all.json')); print(d['dives'][-1]['diso'])")
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "https://$HOST/answers/$D/")
+          CODE=$(curl -sL -o /dev/null -w "%{http_code}" --max-time 30 "https://$HOST/answers/$D/")
           echo "day page /answers/$D/ → $CODE"
           [ "$CODE" = "200" ] || exit 1
           echo "Live site verified on $HOST"
