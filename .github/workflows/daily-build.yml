@@ -1,8 +1,8 @@
 name: Daily build
 
-# M3 影子模式骨架（2026-10-25）：本 workflow 先验证 KV 数据链路（拉取+完整性校验），
-# 完整构建步骤（拉 code 包 → 全量重建 site/ → wrangler 部署 → IndexNow → 线上验收）
-# 按迁移计划接力合入。正式切换前只跑数据验证，不部署生产。
+# songless 模式完整版（2026-10-25）：拉 KV（数据+种子+代码）→ 全量重建 →
+# 数据新鲜度门禁 → 部署 Pages → 线上验收。影子期 PAGES_PROJECT=h4t-shadow，
+# 切换后改为生产项目。公开仓零数据零代码。
 
 on:
   workflow_dispatch: {}
@@ -22,24 +22,34 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
       KV_NAMESPACE: ${{ secrets.KV_NAMESPACE }}
       KV_TOKEN: ${{ secrets.KV_TOKEN }}
-      SITE_HOST: hints4today.com
+      PAGES_PROJECT: ${{ secrets.PAGES_PROJECT }}
+      SITE_HOST: ${{ secrets.SITE_HOST }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Pull dive data from Cloudflare KV
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Pull data, seed and build code from Cloudflare KV
         run: |
           mkdir -p data
           BASE="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces/$KV_NAMESPACE/values"
-          curl -sS --fail --max-time 90 \
+          for k in dives-all site-seed.tar.gz; do
+            curl -sS --fail --max-time 120 \
+              -H "Authorization: Bearer $KV_TOKEN" \
+              "$BASE/data/$k" -o "data/$k"
+            echo "pulled data/$k ($(wc -c < data/$k) bytes)"
+          done
+          curl -sS --fail --max-time 120 \
             -H "Authorization: Bearer $KV_TOKEN" \
-            "$BASE/data/dives-all" -o data/dives-all.json
-          python3 -m json.tool data/dives-all.json > /dev/null
-          echo "pulled dives-all.json ($(wc -c < data/dives-all.json) bytes)"
+            "$BASE/code/pkg.tar.gz" -o code.tar.gz
+          echo "pulled code.tar.gz ($(wc -c < code.tar.gz) bytes)"
 
       - name: Data integrity gate
         run: |
@@ -53,11 +63,56 @@ jobs:
           for x in dives:
               assert len(x['prompts']) == 7, x['diso']
               assert len(x['pools']) == 7, x['diso']
-          today = datetime.date.today()
-          expect_min = (today - datetime.timedelta(days=1)).isoformat()
+          now = datetime.datetime.utcnow()
+          expect_min = (now - datetime.timedelta(days=1)).strftime('%Y-%m-%d')
+          if now.hour < 4:
+              expect_min = (now - datetime.timedelta(days=2)).strftime('%Y-%m-%d')
           latest = max(dates)
           print(f"integrity OK: {len(dives)} dives, latest {latest}")
           if latest < expect_min:
               raise SystemExit(f"STALE: latest {latest} < {expect_min}")
-          print("freshness OK")
+          print("freshness OK (>= %s)" % expect_min)
           EOF
+
+      - name: Unpack and rebuild the full site
+        run: |
+          tar xzf data/site-seed.tar.gz
+          tar xzf code.tar.gz
+          pip install -q curl_cffi
+          python3 scripts/build_all.py
+
+      - name: Local verify (32-check gate)
+        run: python3 scripts/verify_site.py
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PAGES_TOKEN }}
+        run: npx -y wrangler pages deploy site --project-name "$PAGES_PROJECT" --branch main
+
+      - name: Live verification
+        run: |
+          sleep 20
+          LATEST=$(python3 -c "import json; d=json.load(open('data/dives-all.json')); print(d['latest_n'])")
+          HOST="$PAGES_PROJECT.pages.dev"
+          TITLE=$(curl -s --max-time 30 "https://$HOST/" | grep -o '<title>[^<]*</title>' | head -1)
+          echo "Live title: $TITLE (expect #$LATEST)"
+          if ! echo "$TITLE" | grep -q "#$LATEST"; then
+            echo "VERIFICATION FAILED: title does not carry #$LATEST"
+            exit 1
+          fi
+          # 抽查日期页 200
+          D=$(python3 -c "import json; d=json.load(open('data/dives-all.json')); print(d['dives'][-1]['diso'])")
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "https://$HOST/answers/$D/")
+          echo "day page /answers/$D/ → $CODE"
+          [ "$CODE" = "200" ] || exit 1
+          echo "Live site verified on $HOST"
+
+      - name: Build summary
+        if: always()
+        run: |
+          {
+            echo "## Build report"
+            echo "- Finished: $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo "- Pages built: $(find site -name '*.html' | wc -l)"
+            echo "- Project: $PAGES_PROJECT"
+          } >> "$GITHUB_STEP_SUMMARY"
